@@ -1453,7 +1453,7 @@ if menu == "📋 CRM":
                 )
             with col_whatsapp:
                 st.markdown(
-                    f'<a class="action-link" href="{url}" target="_blank"><span class="action-icon action-whatsapp"><svg viewBox="0 0 32 32" role="img" aria-label="WhatsApp"><path fill="white" d="M16 3.2c-6.8 0-12.3 5.2-12.3 11.6 0 2.2.7 4.2 1.9 5.9l-1.3 6.1 6.2-1.6c1.7.8 3.6 1.2 5.5 1.2 6.8 0 12.3-5.2 12.3-11.6S22.8 3.2 16 3.2z"/><path fill="none" stroke="#16a34a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M11 9.5c-.5 0-.9.2-1.2.6-.4.5-1.2 1.5-1.2 3.1 0 1.9 1.5 4.2 3.5 6.1 2.1 2 4.7 3.3 6.1 3.4 1.5.1 2.4-.4 2.9-1 .4-.5.6-1.2.4-1.5-.2-.2-.7-.4-1.4-.7l-2.1-1c-.5-.2-.8-.1-1.1.3l-.9 1.1c-.2.2-.5.3-.9.1-1.5-.6-3-1.6-4.1-2.9-.3-.4-.3-.7-.1-.9l.7-.8c.3-.3.3-.7.1-1.1l-1-2.3c-.3-.8-.6-1.3-1.1-1.3z"/></svg></span><span>WhatsApp</span></a>',
+                    f'<a class="action-link" href="{url}" target="crm_whatsapp"><span class="action-icon action-whatsapp"><svg viewBox="0 0 32 32" role="img" aria-label="WhatsApp"><path fill="white" d="M16 3.2c-6.8 0-12.3 5.2-12.3 11.6 0 2.2.7 4.2 1.9 5.9l-1.3 6.1 6.2-1.6c1.7.8 3.6 1.2 5.5 1.2 6.8 0 12.3-5.2 12.3-11.6S22.8 3.2 16 3.2z"/><path fill="none" stroke="#16a34a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M11 9.5c-.5 0-.9.2-1.2.6-.4.5-1.2 1.5-1.2 3.1 0 1.9 1.5 4.2 3.5 6.1 2.1 2 4.7 3.3 6.1 3.4 1.5.1 2.4-.4 2.9-1 .4-.5.6-1.2.4-1.5-.2-.2-.7-.4-1.4-.7l-2.1-1c-.5-.2-.8-.1-1.1.3l-.9 1.1c-.2.2-.5.3-.9.1-1.5-.6-3-1.6-4.1-2.9-.3-.4-.3-.7-.1-.9l.7-.8c.3-.3.3-.7.1-1.1l-1-2.3c-.3-.8-.6-1.3-1.1-1.3z"/></svg></span><span>WhatsApp</span></a>',
                     unsafe_allow_html=True,
                 )
             with col_llamar:
@@ -1627,6 +1627,8 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
+
 
 
 
