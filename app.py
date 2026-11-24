@@ -6,6 +6,7 @@ import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
+import unicodedata
 from io import BytesIO
 from html import escape
 
@@ -769,6 +770,72 @@ def render_pagination(total, por_pagina):
             st.rerun()
 
 
+def normalizar_encabezado(valor):
+    texto = unicodedata.normalize("NFKD", str(valor or ""))
+    texto = texto.encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", " ", texto).strip()
+
+
+def mapear_encabezados(encabezados):
+    alias = {
+        "placa": {
+            "placa", "placa vehiculo", "numero placa", "numero de placa", "matricula",
+            "patente", "plate", "license plate", "vehiculo placa",
+        },
+        "cliente": {
+            "cliente", "nombre", "nombre cliente", "nombre del cliente", "propietario",
+            "nombre propietario", "titular", "razon social", "customer", "client",
+        },
+        "telefono": {
+            "telefono", "telefono cliente", "celular", "movil", "numero celular",
+            "telefono movil", "whatsapp", "contacto", "phone", "mobile",
+        },
+        "sede": {
+            "sede", "sucursal", "centro", "centro de servicio", "oficina", "localidad",
+            "branch", "site",
+        },
+        "fecha_renovacion": {
+            "fecha renovacion", "fecha de renovacion", "vencimiento", "fecha vencimiento",
+            "fecha de vencimiento", "fecha proxima revision", "proxima revision",
+            "fecha revision", "fecha vencimiento rtm", "fecha rtm", "renewal date",
+            "expiration date", "due date",
+        },
+        "estado": {"estado", "status", "situacion", "estado cliente"},
+    }
+    resultado = {}
+    for encabezado in encabezados:
+        normalizado = normalizar_encabezado(encabezado)
+        for campo, opciones in alias.items():
+            if campo not in resultado and normalizado in opciones:
+                resultado[campo] = encabezado
+    return resultado
+
+
+def nombres_columnas_unicos(valores):
+    resultado = []
+    usados = set()
+    for indice, valor in enumerate(valores, start=1):
+        base = str(valor).strip() if pd.notna(valor) else ""
+        if not base or base.lower().startswith("unnamed"):
+            base = "Columna {}".format(indice)
+        nombre = base
+        sufijo = 2
+        while nombre.lower() in usados:
+            nombre = "{} ({})".format(base, sufijo)
+            sufijo += 1
+        usados.add(nombre.lower())
+        resultado.append(nombre)
+    return resultado
+
+
+def convertir_fecha_excel(valor):
+    if pd.isna(valor) or str(valor).strip() == "":
+        return pd.NaT
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        if 20000 <= float(valor) <= 80000:
+            return pd.to_datetime(valor, unit="D", origin="1899-12-30", errors="coerce")
+    return pd.to_datetime(valor, errors="coerce", dayfirst=True)
+
 def pantalla_importar_base():
     header("Importar Base de Clientes", "📥")
 
@@ -803,66 +870,102 @@ def pantalla_importar_base():
         unsafe_allow_html=True,
     )
 
-    columnas = [
-        "placa",
-        "cliente",
-        "telefono",
-        "sede",
-        "fecha_renovacion",
-        "estado",
-    ]
+    columnas = ["placa", "cliente", "telefono", "sede", "fecha_renovacion", "estado"]
+    campos_requeridos = ["placa", "cliente", "telefono", "fecha_renovacion"]
 
     archivo_excel = st.file_uploader(
-        "Seleccione archivo Excel",
-        type=["xlsx", "xls"],
+        "Seleccione Excel o CSV de clientes", type=["xlsx", "xls", "csv"],
         key="importar_clientes_tab",
     )
-
     if archivo_excel is None:
         c1, c2, c3 = st.columns(3)
         with c1:
-            render_metric("Columnas requeridas", len(columnas))
+            render_metric("Campos reconocidos", len(columnas))
         with c2:
             render_metric("Base activa", base_seleccionada)
         with c3:
-            render_metric("Estados válidos", "3")
-
-        st.info("Carga un archivo Excel con las columnas: placa, cliente, telefono, sede, fecha_renovacion y estado.")
+            render_metric("Formatos", "Excel / CSV")
+        st.info("Puedes cargar Excel o CSV con columnas en cualquier orden. El sistema detecta nombres habituales y permite corregir el mapeo.")
         return
 
     try:
-        df_importar = pd.read_excel(archivo_excel)
+        contenido_archivo = archivo_excel.getvalue()
+        archivo_id = "{}_{}".format(archivo_excel.name, archivo_excel.size)
+        if archivo_excel.name.lower().endswith(".csv"):
+            try:
+                df_raw = pd.read_csv(BytesIO(contenido_archivo), header=None, sep=None, engine="python", dtype=object)
+            except UnicodeDecodeError:
+                df_raw = pd.read_csv(BytesIO(contenido_archivo), header=None, sep=None, engine="python", dtype=object, encoding="latin-1")
+            hoja = "CSV"
+        else:
+            libro = pd.ExcelFile(BytesIO(contenido_archivo))
+            hoja = st.selectbox("Hoja del archivo", libro.sheet_names, key="hoja_importar_{}".format(archivo_id))
+            df_raw = pd.read_excel(BytesIO(contenido_archivo), sheet_name=hoja, header=None, dtype=object)
 
-        total_filas = len(df_importar)
-        faltantes = [
-            c for c in columnas
-            if c not in df_importar.columns
-        ]
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            render_metric("Filas detectadas", total_filas)
-        with c2:
-            render_metric("Columnas", len(df_importar.columns))
-        with c3:
-            render_metric("Faltantes", len(faltantes))
-
-        st.subheader("Vista previa")
-        st.dataframe(df_importar.head(20), use_container_width=True)
-
-        if faltantes:
-            st.error(f"Faltan columnas: {', '.join(faltantes)}")
+        if df_raw.empty:
+            st.error("El archivo no contiene filas para leer.")
             return
 
-        df_limpio = df_importar[columnas].copy().dropna(how="all")
+        filas_revision = min(20, len(df_raw))
+        evaluaciones = []
+        for indice in range(filas_revision):
+            mapa = mapear_encabezados(df_raw.iloc[indice].tolist())
+            evaluaciones.append((len(mapa), indice))
+        mejor_puntaje = max(puntaje for puntaje, _ in evaluaciones)
+        fila_sugerida = next(indice for puntaje, indice in evaluaciones if puntaje == mejor_puntaje)
+
+        def etiqueta_fila(indice):
+            valores = [str(v) for v in df_raw.iloc[indice].tolist() if pd.notna(v)]
+            return "Fila {}: {}".format(indice + 1, " | ".join(valores[:6])[:100])
+
+        fila_encabezados = st.selectbox(
+            "Fila donde están los encabezados", options=list(range(filas_revision)),
+            index=fila_sugerida, format_func=etiqueta_fila,
+            key="fila_encabezados_{}_{}".format(archivo_id, hoja),
+        )
+        encabezados_originales = df_raw.iloc[fila_encabezados].tolist()
+        encabezados = nombres_columnas_unicos(encabezados_originales)
+        df_importar = df_raw.iloc[fila_encabezados + 1:].copy().reset_index(drop=True)
+        df_importar.columns = encabezados
+        mapeo_auto = mapear_encabezados(encabezados_originales)
+
+        st.subheader("Relaciona las columnas del archivo con los campos del CRM")
+        st.caption("El orden no importa. Las columnas adicionales se ignorarán.")
+        mapeo = {}
+        opciones_columnas = ["— No usar —"] + encabezados
+        columnas_mapeo = st.columns(3)
+        for indice, campo in enumerate(columnas):
+            with columnas_mapeo[indice % 3]:
+                sugerida = mapeo_auto.get(campo)
+                default_index = opciones_columnas.index(sugerida) if sugerida in opciones_columnas else 0
+                mapeo[campo] = st.selectbox(
+                    "{}{}".format(campo.replace("_", " ").title(), " *" if campo in campos_requeridos else ""),
+                    opciones_columnas, index=default_index,
+                    key="map_{}_{}_{}".format(campo, archivo_id, hoja),
+                )
+
+        faltantes = [campo for campo in campos_requeridos if mapeo[campo] == "— No usar —"]
+        st.caption("* Obligatorios: placa, cliente, teléfono y fecha de renovación.")
+        if faltantes:
+            st.warning("Asigna una columna para: {}.".format(", ".join(faltantes)))
+            st.dataframe(df_importar.head(10), use_container_width=True, hide_index=True)
+            return
+
+        df_limpio = pd.DataFrame(index=df_importar.index)
+        for campo in columnas:
+            fuente = mapeo[campo]
+            if fuente == "— No usar —":
+                df_limpio[campo] = "Pendiente" if campo == "estado" else ""
+            else:
+                df_limpio[campo] = df_importar[fuente]
+        st.subheader("Vista previa del mapeo")
+        st.dataframe(df_limpio.head(20), use_container_width=True, hide_index=True)
         df_limpio["placa"] = df_limpio["placa"].fillna("").astype(str).str.strip().str.upper()
         df_limpio["cliente"] = df_limpio["cliente"].fillna("").astype(str).str.strip()
         df_limpio["telefono"] = df_limpio["telefono"].fillna("").astype(str).str.strip()
         df_limpio["sede"] = df_limpio["sede"].fillna("").astype(str).str.strip()
         df_limpio["estado"] = df_limpio["estado"].fillna("Pendiente").astype(str).str.strip().str.title()
-        df_limpio["fecha_renovacion"] = pd.to_datetime(
-            df_limpio["fecha_renovacion"], errors="coerce", dayfirst=True
-        )
+        df_limpio["fecha_renovacion"] = df_limpio["fecha_renovacion"].apply(convertir_fecha_excel)
         estados_validos = {"Pendiente", "Agendado", "Renovado"}
         validas = (
             df_limpio["placa"].ne("") & df_limpio["cliente"].ne("")
@@ -1244,180 +1347,6 @@ if menu == "📋 CRM":
                     <a class="action-link" href="tel:+57{texto_html(telefono)}">
                         <span class="action-icon action-call">☎</span>
                         <span>Llamar</span>
-                    </a>
-                    <div class="manage-button">
-                        <div style="font-size:1.45rem;">📋</div>
-                        <div>Gestión</div>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        with st.expander(f"📋 Gestión - {placa}"):
-            col_estado, col_obs = st.columns([1, 2])
-
-            with col_estado:
-                nuevo_estado = st.selectbox(
-                    "Estado",
-                    estados,
-                    index=estados.index(estado_actual),
-                    key=f"estado_nuevo_{row['id']}",
-                )
-
-                if nuevo_estado != row["estado"]:
-                    supabase.table("clientes").update({"estado": nuevo_estado}).eq("id", row["id"]).execute()
-                    st.rerun()
-
-            with col_obs:
-                observacion = st.text_area("Observación", key=f"obs_nueva_{row['id']}")
-
-            if st.button("Guardar gestión", key=f"guardar_nueva_{row['id']}", use_container_width=True):
-                if observacion:
-                    supabase.table("gestiones").insert({
-                        "cliente_id": row["id"],
-                        "observacion": observacion,
-                    }).execute()
-
-                    st.success("Gestión guardada")
-                    st.rerun()
-                else:
-                    st.warning("Escribe una observación antes de guardar.")
-
-            historial = (
-                supabase
-                .table("gestiones")
-                .select("*")
-                .eq("cliente_id", row["id"])
-                .order("fecha", desc=True)
-                .execute()
-            )
-
-            if len(historial.data) > 0:
-                st.write("### Historial")
-
-                for g in historial.data:
-                    st.write(f"📅 {g['fecha'][:10]} - {g['observacion']}")
-
-
-    if total_filtrado == 0:
-        st.info("No hay clientes con los filtros seleccionados.")
-    else:
-        desde = inicio + 1
-        hasta = min(fin, total_filtrado)
-        st.caption(f"Mostrando {desde} a {hasta} de {total_filtrado} clientes")
-        render_pagination(total_filtrado, por_pagina)
-
-
-# ======================================================
-# IMPORTAR BASE
-# ======================================================
-
-if menu == "📥 Importar Base":
-    pantalla_importar_base()
-
-
-# ======================================================
-# ADMINISTRACION
-# ======================================================
-
-if menu == "👥 Administración":
-    header("Administración", "👥")
-
-    if st.session_state.rol != "admin":
-        st.warning("No tienes permisos para acceder.")
-
-    else:
-        st.subheader("Usuarios")
-
-        usuarios = (
-            supabase
-            .table("usuarios")
-            .select("*")
-            .execute()
-        )
-
-        df_usuarios = pd.DataFrame([{k: v for k, v in u.items() if k != "password"} for u in usuarios.data])
-
-        st.dataframe(
-            df_usuarios,
-            use_container_width=True,
-        )
-
-        st.divider()
-
-        st.subheader("Eliminar usuario")
-
-        opciones = [
-            u["usuario"]
-            for u in usuarios.data
-            if u["usuario"] != "admin"
-        ]
-
-        if opciones:
-            usuario_eliminar = st.selectbox(
-                "Seleccione usuario",
-                opciones,
-            )
-
-            if st.button("Eliminar usuario"):
-                supabase.table("usuarios").delete().eq(
-                    "usuario",
-                    usuario_eliminar,
-                ).execute()
-
-                st.success("Usuario eliminado")
-                st.rerun()
-
-        base_eliminar = st.selectbox(
-            "Eliminar base",
-            list(bases_dict.keys()),
-        )
-
-        confirmar_borrado = st.checkbox(
-            f"Confirmo eliminar la base {base_eliminar} y todos sus clientes",
-            key="confirmar_borrado_base",
-        )
-        if st.button("Eliminar Base", disabled=not confirmar_borrado):
-            if len(bases_dict) <= 1:
-                st.error("No se puede eliminar la última base.")
-            else:
-                id_base = bases_dict[base_eliminar]
-                supabase.table("clientes").delete().eq("base_id", id_base).execute()
-                supabase.table("bases").delete().eq("id", id_base).execute()
-                st.success("Base y clientes asociados eliminados")
-                st.rerun()
-
-        st.divider()
-
-        st.subheader("Crear usuario")
-
-        nuevo_usuario = st.text_input("Usuario nuevo")
-        nuevo_password = st.text_input("Contraseña nueva", type="password")
-        nuevo_rol = st.selectbox("Rol", ["admin", "asesor"])
-
-        if st.button("Crear usuario"):
-            usuario_limpio = nuevo_usuario.strip()
-            if not usuario_limpio or not nuevo_password:
-                st.error("Escribe un usuario y una contraseña.")
-            elif len(nuevo_password) < 10:
-                st.error("La contraseña debe tener al menos 10 caracteres.")
-            else:
-                existente = supabase.table("usuarios").select("usuario").eq(
-                    "usuario", usuario_limpio
-                ).limit(1).execute()
-                if existente.data:
-                    st.error("Ese usuario ya existe.")
-                else:
-                    supabase.table("usuarios").insert({
-                        "usuario": usuario_limpio,
-                        "password": hash_password(nuevo_password),
-                        "rol": nuevo_rol,
-                    }).execute()
-                    st.success("Usuario creado correctamente")
-                    st.rerun()
-
-
+                    <
 
 
