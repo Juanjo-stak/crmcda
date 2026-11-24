@@ -521,20 +521,21 @@ bases_dict = {
     for b in bases.data
 }
 
-if not bases_dict:
-    st.error("No hay bases creadas. Crea una base en Supabase antes de continuar.")
+if not bases_dict and menu != "📥 Importar Base":
+    st.error("No hay bases creadas. Ve a Importar Base para crear la primera.")
     st.stop()
 
-st.sidebar.divider()
-st.sidebar.caption("BASE ACTIVA")
-
-base_seleccionada = st.sidebar.selectbox(
-    "Base activa",
-    list(bases_dict.keys()),
-    label_visibility="collapsed",
-)
-
-base_id = bases_dict[base_seleccionada]
+if bases_dict:
+    st.sidebar.divider()
+    st.sidebar.caption("BASE ACTIVA")
+    base_seleccionada = st.sidebar.selectbox(
+        "Base activa", list(bases_dict.keys()), label_visibility="collapsed"
+    )
+    base_id = bases_dict[base_seleccionada]
+else:
+    base_seleccionada = None
+    base_id = None
+    st.sidebar.info("Aún no hay bases")
 
 st.sidebar.markdown(
     f"""
@@ -696,6 +697,27 @@ def render_pagination(total, por_pagina):
 def pantalla_importar_base():
     header("Importar Base de Clientes", "📥")
 
+    if st.session_state.rol == "admin":
+        with st.expander("➕ Crear nueva base", expanded=not bool(bases_dict)):
+            nombre_base = st.text_input("Nombre de la nueva base", key="nueva_base_importar")
+            if st.button("Crear Base", key="crear_base_importar"):
+                nombre_limpio = nombre_base.strip()
+                if not nombre_limpio:
+                    st.error("Escribe el nombre de la base.")
+                elif any(n.lower() == nombre_limpio.lower() for n in bases_dict):
+                    st.error("Ya existe una base con ese nombre.")
+                else:
+                    supabase.table("bases").insert({"nombre": nombre_limpio}).execute()
+                    st.success("Base creada correctamente.")
+                    st.rerun()
+    elif not bases_dict:
+        st.warning("No hay bases creadas. Solicita a un administrador que cree la primera.")
+        return
+
+    if not base_seleccionada:
+        st.info("Crea una base para comenzar a importar clientes.")
+        return
+
     st.markdown(
         f"""
         <div class="metric-card" style="margin-bottom:1rem;">
@@ -804,15 +826,13 @@ def pantalla_importar_base():
 # CLIENTES
 # ======================================================
 
-resultado = (
-    supabase
-    .table("clientes")
-    .select("*")
-    .eq("base_id", base_id)
-    .execute()
-)
-
-df = pd.DataFrame(resultado.data)
+if base_id is not None:
+    resultado = (
+        supabase.table("clientes").select("*").eq("base_id", base_id).execute()
+    )
+    df = pd.DataFrame(resultado.data)
+else:
+    df = pd.DataFrame()
 
 for columna, valor_defecto in {
     "placa": "",
@@ -1168,19 +1188,6 @@ if menu == "👥 Administración":
                 ).execute()
 
                 st.success("Usuario eliminado")
-                st.rerun()
-
-        st.subheader("Bases")
-
-        nombre_base = st.text_input("Nombre de la nueva base")
-
-        if st.button("Crear Base"):
-            if nombre_base:
-                supabase.table("bases").insert({
-                    "nombre": nombre_base,
-                }).execute()
-
-                st.success("Base creada")
                 st.rerun()
 
         base_eliminar = st.selectbox(
