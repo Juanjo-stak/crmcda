@@ -262,7 +262,7 @@ st.markdown(
 
     .client-card-grid{
         display:grid;
-        grid-template-columns:minmax(280px, 1fr) 150px 150px 90px 90px 88px;
+        grid-template-columns:minmax(280px, 1fr) 150px 150px 90px 90px;
         align-items:center;
         gap:1rem;
     }
@@ -1295,7 +1295,9 @@ if menu == "📋 CRM":
         )
 
     total_filtrado = len(df_filtrado)
-    por_pagina = 5
+    por_pagina = st.selectbox(
+        "Clientes por página", [10, 20, 50], index=0, key="clientes_por_pagina"
+    )
     total_paginas = max(1, math.ceil(total_filtrado / por_pagina))
     st.session_state.pagina_clientes = min(st.session_state.pagina_clientes, total_paginas)
     inicio = (st.session_state.pagina_clientes - 1) * por_pagina
@@ -1320,89 +1322,108 @@ if menu == "📋 CRM":
         nota = texto_html(ultima_observacion(row["id"]))
         estado_html = texto_html(estado_actual)
 
-        st.markdown(
-            f'''
-            <div class="client-card">
-                <div class="client-card-grid">
-                    <div class="client-main">
-                        <div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div>
-                        <div style="min-width:0;">
-                            <div class="plate">{placa_html}</div>
-                            <div class="client-name">{cliente_html}</div>
-                            <div class="last-note">📝 {nota}</div>
+        tarjeta, columna_gestion = st.columns([8.5, 1.5])
+        with tarjeta:
+            st.markdown(
+                f'''
+                <div class="client-card">
+                    <div class="client-card-grid">
+                        <div class="client-main">
+                            <div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div>
+                            <div style="min-width:0;">
+                                <div class="plate">{placa_html}</div>
+                                <div class="client-name">{cliente_html}</div>
+                                <div class="last-note">📝 {nota}</div>
+                            </div>
                         </div>
-                    </div>
-                    <div class="card-separator">
-                        <div class="cell-title">Vencimiento</div>
-                        <div class="due-date">{vencimiento_html}</div>
-                    </div>
-                    <div class="card-separator">
-                        <div class="cell-title">Estado</div>
-                        <span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span>
-                    </div>
-                    <a class="action-link" href="{url}" target="_blank">
-                        <span class="action-icon action-whatsapp">☏</span>
-                        <span>WhatsApp</span>
-                    </a>
-                    <a class="action-link" href="tel:+57{texto_html(telefono)}">
-                        <span class="action-icon action-call">☎</span>
-                        <span>Llamar</span>
-                    </a>
-                    <div class="manage-button">
-                        <div style="font-size:1.45rem;">📋</div>
-                        <div>Gestión</div>
+                        <div class="card-separator">
+                            <div class="cell-title">Vencimiento</div>
+                            <div class="due-date">{vencimiento_html}</div>
+                        </div>
+                        <div class="card-separator">
+                            <div class="cell-title">Estado</div>
+                            <span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span>
+                        </div>
+                        <a class="action-link" href="{url}" target="_blank">
+                            <span class="action-icon action-whatsapp">☏</span>
+                            <span>WhatsApp</span>
+                        </a>
+                        <a class="action-link" href="tel:+57{texto_html(telefono)}">
+                            <span class="action-icon action-call">☎</span>
+                            <span>Llamar</span>
+                        </a>
                     </div>
                 </div>
-            </div>
-            ''',
-            unsafe_allow_html=True,
-        )
+                ''',
+                unsafe_allow_html=True,
+            )
 
-        with st.expander(f"📋 Gestión - {placa}"):
+        cliente_id_gestion = str(row["id"])
+        with columna_gestion:
+            if st.button("📋 Gestión", key="abrir_gestion_{}".format(cliente_id_gestion), use_container_width=True):
+                st.session_state.cliente_gestion_activa = cliente_id_gestion
+
+        if st.session_state.get("cliente_gestion_activa") == cliente_id_gestion:
+            st.markdown("#### 📋 Gestión - {}".format(texto_html(placa)))
             col_estado, col_obs = st.columns([1, 2])
-
             with col_estado:
                 nuevo_estado = st.selectbox(
                     "Estado",
                     estados,
                     index=estados.index(estado_actual),
-                    key=f"estado_nuevo_{row['id']}",
+                    key="estado_gestion_{}".format(cliente_id_gestion),
+                )
+            with col_obs:
+                version_form = st.session_state.get("version_form_gestion", 0)
+                observacion = st.text_area(
+                    "Observación",
+                    key="obs_gestion_{}_{}".format(cliente_id_gestion, version_form),
                 )
 
-                if nuevo_estado != row["estado"]:
-                    supabase.table("clientes").update({"estado": nuevo_estado}).eq("id", row["id"]).execute()
-                    st.rerun()
+            guardar_col, cerrar_col = st.columns([1, 1])
+            with guardar_col:
+                guardar = st.button(
+                    "Guardar gestión",
+                    key="guardar_gestion_{}".format(cliente_id_gestion),
+                    use_container_width=True,
+                )
+            with cerrar_col:
+                cerrar = st.button(
+                    "Cerrar",
+                    key="cerrar_gestion_{}".format(cliente_id_gestion),
+                    use_container_width=True,
+                )
 
-            with col_obs:
-                observacion = st.text_area("Observación", key=f"obs_nueva_{row['id']}")
-
-            if st.button("Guardar gestión", key=f"guardar_nueva_{row['id']}", use_container_width=True):
-                if observacion:
-                    supabase.table("gestiones").insert({
-                        "cliente_id": row["id"],
-                        "observacion": observacion,
-                    }).execute()
-
-                    st.success("Gestión guardada")
-                    st.rerun()
+            if guardar:
+                if nuevo_estado == estado_actual and not observacion.strip():
+                    st.warning("Cambia el estado o escribe una observación para guardar.")
                 else:
-                    st.warning("Escribe una observación antes de guardar.")
+                    if nuevo_estado != estado_actual:
+                        supabase.table("clientes").update({"estado": nuevo_estado}).eq(
+                            "id", row["id"]
+                        ).execute()
+                    if observacion.strip():
+                        supabase.table("gestiones").insert({
+                            "cliente_id": row["id"],
+                            "observacion": observacion.strip(),
+                        }).execute()
+                    st.session_state.version_form_gestion = version_form + 1
+                    st.success("Gestión guardada.")
+                    st.rerun()
+
+            if cerrar:
+                st.session_state.cliente_gestion_activa = ""
+                st.rerun()
 
             historial = (
-                supabase
-                .table("gestiones")
-                .select("*")
-                .eq("cliente_id", row["id"])
-                .order("fecha", desc=True)
-                .execute()
+                supabase.table("gestiones").select("*")
+                .eq("cliente_id", row["id"]).order("fecha", desc=True).execute()
             )
-
-            if len(historial.data) > 0:
-                st.write("### Historial")
-
-                for g in historial.data:
-                    st.write(f"📅 {g['fecha'][:10]} - {g['observacion']}")
-
+            if historial.data:
+                st.write("**Historial de gestiones**")
+                for gestion in historial.data:
+                    fecha_gestion = str(gestion.get("fecha", ""))[:10]
+                    st.write("📅 {} — {}".format(fecha_gestion, gestion.get("observacion", "")))
 
     if total_filtrado == 0:
         st.info("No hay clientes con los filtros seleccionados.")
