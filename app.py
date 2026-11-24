@@ -1321,7 +1321,7 @@ if menu == "📋 CRM":
         estado_html = texto_html(estado_actual)
 
         st.markdown(
-            f"""
+            f'''
             <div class="client-card">
                 <div class="client-card-grid">
                     <div class="client-main">
@@ -1347,6 +1347,178 @@ if menu == "📋 CRM":
                     <a class="action-link" href="tel:+57{texto_html(telefono)}">
                         <span class="action-icon action-call">☎</span>
                         <span>Llamar</span>
-                    <
+                    </a>
+                    <div class="manage-button">
+                        <div style="font-size:1.45rem;">📋</div>
+                        <div>Gestión</div>
+                    </div>
+                </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+
+        with st.expander(f"📋 Gestión - {placa}"):
+            col_estado, col_obs = st.columns([1, 2])
+
+            with col_estado:
+                nuevo_estado = st.selectbox(
+                    "Estado",
+                    estados,
+                    index=estados.index(estado_actual),
+                    key=f"estado_nuevo_{row['id']}",
+                )
+
+                if nuevo_estado != row["estado"]:
+                    supabase.table("clientes").update({"estado": nuevo_estado}).eq("id", row["id"]).execute()
+                    st.rerun()
+
+            with col_obs:
+                observacion = st.text_area("Observación", key=f"obs_nueva_{row['id']}")
+
+            if st.button("Guardar gestión", key=f"guardar_nueva_{row['id']}", use_container_width=True):
+                if observacion:
+                    supabase.table("gestiones").insert({
+                        "cliente_id": row["id"],
+                        "observacion": observacion,
+                    }).execute()
+
+                    st.success("Gestión guardada")
+                    st.rerun()
+                else:
+                    st.warning("Escribe una observación antes de guardar.")
+
+            historial = (
+                supabase
+                .table("gestiones")
+                .select("*")
+                .eq("cliente_id", row["id"])
+                .order("fecha", desc=True)
+                .execute()
+            )
+
+            if len(historial.data) > 0:
+                st.write("### Historial")
+
+                for g in historial.data:
+                    st.write(f"📅 {g['fecha'][:10]} - {g['observacion']}")
+
+
+    if total_filtrado == 0:
+        st.info("No hay clientes con los filtros seleccionados.")
+    else:
+        desde = inicio + 1
+        hasta = min(fin, total_filtrado)
+        st.caption(f"Mostrando {desde} a {hasta} de {total_filtrado} clientes")
+        render_pagination(total_filtrado, por_pagina)
+
+
+# ======================================================
+# IMPORTAR BASE
+# ======================================================
+
+if menu == "📥 Importar Base":
+    pantalla_importar_base()
+
+
+# ======================================================
+# ADMINISTRACION
+# ======================================================
+
+if menu == "👥 Administración":
+    header("Administración", "👥")
+
+    if st.session_state.rol != "admin":
+        st.warning("No tienes permisos para acceder.")
+
+    else:
+        st.subheader("Usuarios")
+
+        usuarios = (
+            supabase
+            .table("usuarios")
+            .select("*")
+            .execute()
+        )
+
+        df_usuarios = pd.DataFrame([{k: v for k, v in u.items() if k != "password"} for u in usuarios.data])
+
+        st.dataframe(
+            df_usuarios,
+            use_container_width=True,
+        )
+
+        st.divider()
+
+        st.subheader("Eliminar usuario")
+
+        opciones = [
+            u["usuario"]
+            for u in usuarios.data
+            if u["usuario"] != "admin"
+        ]
+
+        if opciones:
+            usuario_eliminar = st.selectbox(
+                "Seleccione usuario",
+                opciones,
+            )
+
+            if st.button("Eliminar usuario"):
+                supabase.table("usuarios").delete().eq(
+                    "usuario",
+                    usuario_eliminar,
+                ).execute()
+
+                st.success("Usuario eliminado")
+                st.rerun()
+
+        base_eliminar = st.selectbox(
+            "Eliminar base",
+            list(bases_dict.keys()),
+        )
+
+        confirmar_borrado = st.checkbox(
+            f"Confirmo eliminar la base {base_eliminar} y todos sus clientes",
+            key="confirmar_borrado_base",
+        )
+        if st.button("Eliminar Base", disabled=not confirmar_borrado):
+            if len(bases_dict) <= 1:
+                st.error("No se puede eliminar la última base.")
+            else:
+                id_base = bases_dict[base_eliminar]
+                supabase.table("clientes").delete().eq("base_id", id_base).execute()
+                supabase.table("bases").delete().eq("id", id_base).execute()
+                st.success("Base y clientes asociados eliminados")
+                st.rerun()
+
+        st.divider()
+
+        st.subheader("Crear usuario")
+
+        nuevo_usuario = st.text_input("Usuario nuevo")
+        nuevo_password = st.text_input("Contraseña nueva", type="password")
+        nuevo_rol = st.selectbox("Rol", ["admin", "asesor"])
+
+        if st.button("Crear usuario"):
+            usuario_limpio = nuevo_usuario.strip()
+            if not usuario_limpio or not nuevo_password:
+                st.error("Escribe un usuario y una contraseña.")
+            elif len(nuevo_password) < 10:
+                st.error("La contraseña debe tener al menos 10 caracteres.")
+            else:
+                existente = supabase.table("usuarios").select("usuario").eq(
+                    "usuario", usuario_limpio
+                ).limit(1).execute()
+                if existente.data:
+                    st.error("Ese usuario ya existe.")
+                else:
+                    supabase.table("usuarios").insert({
+                        "usuario": usuario_limpio,
+                        "password": hash_password(nuevo_password),
+                        "rol": nuevo_rol,
+                    }).execute()
+                    st.success("Usuario creado correctamente")
+                    st.rerun()
 
 
