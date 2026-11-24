@@ -1,8 +1,12 @@
+import base64
+import datetime as dt
 import hashlib
+import hmac
 import json
 import math
 import re
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +17,11 @@ from html import escape
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+try:
+    import extra_streamlit_components as stx
+except ImportError:
+    stx = None
 from supabase_config import supabase
 
 
@@ -42,6 +51,79 @@ if "filtro_estado" not in st.session_state:
 if "pagina_clientes" not in st.session_state:
     st.session_state.pagina_clientes = 1
 
+
+# Sesión persistente en el navegador: solo guarda usuario y vencimiento, nunca la contraseña.
+SESSION_COOKIE_NAME = "crm_session"
+SESSION_DURATION_DAYS = 14
+SESSION_SECRET = ""
+try:
+    SESSION_SECRET = str(st.secrets.get("CRM_SESSION_SECRET", "")).strip()
+except Exception:
+    pass
+
+cookie_manager = stx.CookieManager(key="crm_cookie_manager") if stx else None
+
+
+def crear_token_sesion(usuario, secret):
+    payload = json.dumps(
+        {"usuario": str(usuario), "exp": int(time.time()) + SESSION_DURATION_DAYS * 86400},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    firma = hmac.new(secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).digest()
+    firma_b64 = base64.urlsafe_b64encode(firma).decode("ascii").rstrip("=")
+    return f"{payload_b64}.{firma_b64}"
+
+
+def validar_token_sesion(token, secret):
+    try:
+        if not token or len(token) > 8192:
+            return None
+        payload_b64, firma_b64 = str(token).split(".", 1)
+        firma = base64.urlsafe_b64decode(firma_b64 + "=" * (-len(firma_b64) % 4))
+        firma_esperada = hmac.new(
+            secret.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(firma, firma_esperada):
+            return None
+        payload = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+        datos = json.loads(payload.decode("utf-8"))
+        if int(datos.get("exp", 0)) <= int(time.time()):
+            return None
+        usuario = str(datos.get("usuario", "")).strip()
+        return usuario or None
+    except Exception:
+        return None
+
+
+def restaurar_sesion():
+    if st.session_state.login or not SESSION_SECRET or len(SESSION_SECRET) < 32 or not cookie_manager:
+        return
+    token = cookie_manager.get(SESSION_COOKIE_NAME)
+    if not token:
+        return
+    usuario = validar_token_sesion(token, SESSION_SECRET)
+    if not usuario:
+        cookie_manager.delete(SESSION_COOKIE_NAME, key="crm_cookie_delete")
+        return
+    try:
+        resultado = (
+            supabase.table("usuarios").select("usuario,rol")
+            .eq("usuario", usuario).limit(1).execute()
+        )
+        datos = resultado.data[0] if resultado.data else None
+        if datos:
+            st.session_state.login = True
+            st.session_state.usuario = datos["usuario"]
+            st.session_state.rol = datos.get("rol", "")
+        else:
+            cookie_manager.delete(SESSION_COOKIE_NAME, key="crm_cookie_delete")
+    except Exception:
+        # Si la base de usuarios no responde, dejamos que el usuario inicie sesión normalmente.
+        return
+
+
+restaurar_sesion()
 
 def hash_password(password):
     salt = secrets.token_bytes(16)
@@ -79,6 +161,11 @@ def pantalla_login():
         unsafe_allow_html=True,
     )
 
+    if cookie_manager is None:
+        st.info("Para conservar la sesión al actualizar, agrega extra-streamlit-components a requirements.txt.")
+    elif len(SESSION_SECRET) < 32:
+        st.info("Para conservar la sesión, configura CRM_SESSION_SECRET en los Secrets de Streamlit (mínimo 32 caracteres).")
+
     usuario = st.text_input("Usuario")
     password = st.text_input("Contraseña", type="password")
 
@@ -96,6 +183,16 @@ def pantalla_login():
             st.session_state.login = True
             st.session_state.usuario = datos["usuario"]
             st.session_state.rol = datos["rol"]
+            if cookie_manager and len(SESSION_SECRET) >= 32:
+                cookie_manager.set(
+                    SESSION_COOKIE_NAME,
+                    crear_token_sesion(datos["usuario"], SESSION_SECRET),
+                    key="crm_session_write",
+                    path="/",
+                    expires_at=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=SESSION_DURATION_DAYS),
+                    secure=True,
+                    same_site="lax",
+                )
             st.rerun()
         st.error("Usuario o contraseña incorrectos")
 
@@ -576,6 +673,8 @@ st.sidebar.markdown(
 )
 
 if st.sidebar.button("↪ Salir", use_container_width=True):
+    if cookie_manager:
+        cookie_manager.delete(SESSION_COOKIE_NAME, key="crm_session_logout")
     st.session_state.login = False
     st.session_state.usuario = ""
     st.session_state.rol = ""
@@ -1639,8 +1738,6 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
-
-
 
 
 
