@@ -539,7 +539,6 @@ base_id = bases_dict[base_seleccionada]
 st.sidebar.markdown(
     f"""
     <div class="sidebar-footer">
-        <div class="user-chip">👤 {texto_html(st.session_state.usuario)}</div>
         <div class="user-chip">👤 {escape(str(st.session_state.usuario or ""))}</div>
     </div>
     """,
@@ -1231,4 +1230,5 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
 
