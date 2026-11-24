@@ -1,4 +1,7 @@
-﻿import math
+﻿import hashlib
+import math
+import re
+import secrets
 import urllib.parse
 from io import BytesIO
 from html import escape
@@ -8,6 +11,13 @@ import plotly.express as px
 import streamlit as st
 from supabase_config import supabase
 
+
+st.set_page_config(
+    page_title="CRM CDA",
+    page_icon="🚗",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # ======================================================
 # SESSION
@@ -28,6 +38,26 @@ if "filtro_estado" not in st.session_state:
 if "pagina_clientes" not in st.session_state:
     st.session_state.pagina_clientes = 1
 
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 310_000)
+    return "pbkdf2_sha256$310000$" + salt.hex() + "$" + digest.hex()
+
+
+def verificar_password(password, almacenada):
+    if not almacenada:
+        return False
+    if not str(almacenada).startswith("pbkdf2_sha256$"):
+        return secrets.compare_digest(str(almacenada), password)
+    try:
+        algoritmo, iteraciones, salt_hex, digest_hex = str(almacenada).split("$", 3)
+        if algoritmo != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(iteraciones))
+        return secrets.compare_digest(digest.hex(), digest_hex)
+    except (ValueError, TypeError):
+        return False
 
 # ======================================================
 # LOGIN
@@ -50,37 +80,25 @@ def pantalla_login():
 
     if st.button("Ingresar", use_container_width=True):
         resultado = (
-            supabase
-            .table("usuarios")
-            .select("*")
-            .eq("usuario", usuario)
-            .eq("password", password)
-            .execute()
+            supabase.table("usuarios").select("usuario,password,rol")
+            .eq("usuario", usuario.strip()).limit(1).execute()
         )
-
-        if len(resultado.data) > 0:
-            datos = resultado.data[0]
-
+        datos = resultado.data[0] if resultado.data else None
+        if datos and verificar_password(password, datos.get("password", "")):
+            if not str(datos.get("password", "")).startswith("pbkdf2_sha256$"):
+                supabase.table("usuarios").update({"password": hash_password(password)}).eq(
+                    "usuario", datos["usuario"]
+                ).execute()
             st.session_state.login = True
             st.session_state.usuario = datos["usuario"]
             st.session_state.rol = datos["rol"]
-
             st.rerun()
-
-        else:
-            st.error("Usuario o contraseña incorrectos")
+        st.error("Usuario o contraseña incorrectos")
 
 
 # ======================================================
 # CONFIGURACION
 # ======================================================
-
-st.set_page_config(
-    page_title="CRM CDA",
-    page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
 st.markdown(
     """
@@ -521,7 +539,7 @@ base_id = bases_dict[base_seleccionada]
 st.sidebar.markdown(
     f"""
     <div class="sidebar-footer">
-        <div class="user-chip">👤 {st.session_state.usuario}</div>
+        <div class="user-chip">👤 {texto_html(st.session_state.usuario)}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -541,7 +559,7 @@ if st.sidebar.button("↪ Salir", use_container_width=True):
 def link_whatsapp(nombre, placa, telefono):
     telefono = str(telefono).replace(".0", "")
     telefono = telefono.replace(" ", "")
-    telefono = telefono.replace("-", "")
+    telefono = re.sub(r"\D", "", telefono)
 
     if not telefono.startswith("57"):
         telefono = "57" + telefono
@@ -558,7 +576,7 @@ Tu vehículo con placa {placa} tiene vencimiento próximo.
 
     mensaje = urllib.parse.quote(mensaje)
 
-    return f"https://wa.me/{telefono}?text={mensaje}"
+    return f"https://wa.me/{telefono}?text={mensaje}" if telefono.isdigit() and 10 <= len(telefono) <= 12 else "#"
 
 
 def convertir_excel(dataframe):
@@ -579,7 +597,7 @@ def header(titulo, icono):
         f"""
         <div class="main-header">
             <h1 class="main-title"><span>{icono}</span><span>{titulo}</span></h1>
-            <div class="user-chip">👤 {st.session_state.usuario}</div>
+            <div class="user-chip">👤 {texto_html(st.session_state.usuario)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -603,7 +621,7 @@ def color_avatar(index):
 def telefono_limpio(telefono):
     telefono = str(telefono).replace(".0", "")
     telefono = telefono.replace(" ", "")
-    telefono = telefono.replace("-", "")
+    telefono = re.sub(r"\D", "", telefono)
     return telefono
 
 
@@ -739,26 +757,44 @@ def pantalla_importar_base():
             st.error(f"Faltan columnas: {', '.join(faltantes)}")
             return
 
-        df_limpio = df_importar[columnas].copy()
-        df_limpio = df_limpio.dropna(how="all")
-        df_limpio["estado"] = df_limpio["estado"].fillna("Pendiente")
+        df_limpio = df_importar[columnas].copy().dropna(how="all")
+        df_limpio["placa"] = df_limpio["placa"].fillna("").astype(str).str.strip().str.upper()
+        df_limpio["cliente"] = df_limpio["cliente"].fillna("").astype(str).str.strip()
+        df_limpio["telefono"] = df_limpio["telefono"].fillna("").astype(str).str.strip()
+        df_limpio["sede"] = df_limpio["sede"].fillna("").astype(str).str.strip()
+        df_limpio["estado"] = df_limpio["estado"].fillna("Pendiente").astype(str).str.strip().str.title()
         df_limpio["fecha_renovacion"] = pd.to_datetime(
-            df_limpio["fecha_renovacion"],
-            errors="coerce",
+            df_limpio["fecha_renovacion"], errors="coerce", dayfirst=True
         )
-        df_limpio = df_limpio.dropna(subset=["fecha_renovacion"])
+        estados_validos = {"Pendiente", "Agendado", "Renovado"}
+        validas = (
+            df_limpio["placa"].ne("") & df_limpio["cliente"].ne("")
+            & df_limpio["telefono"].ne("") & df_limpio["fecha_renovacion"].notna()
+            & df_limpio["estado"].isin(estados_validos)
+        )
+        rechazadas = int((~validas).sum())
+        df_limpio = df_limpio.loc[validas].copy().drop_duplicates(subset=["placa"], keep="first")
+        existentes = supabase.table("clientes").select("placa").eq("base_id", base_id).execute()
+        placas_existentes = {str(x.get("placa", "")).strip().upper() for x in existentes.data}
+        duplicados = df_limpio["placa"].isin(placas_existentes)
+        rechazadas += int(duplicados.sum())
+        df_limpio = df_limpio.loc[~duplicados].copy()
         df_limpio["fecha_renovacion"] = df_limpio["fecha_renovacion"].dt.strftime("%Y-%m-%d")
         df_limpio["base_id"] = base_id
-
+        st.caption(f"Filas omitidas por datos inválidos o placa repetida: {rechazadas}.")
         st.success(f"{len(df_limpio)} clientes listos para importar en {base_seleccionada}.")
 
-        if st.button("Importar clientes", use_container_width=True):
-            registros = df_limpio.to_dict(orient="records")
-
-            supabase.table("clientes").insert(registros).execute()
-
-            st.success(f"{len(registros)} clientes importados correctamente")
-            st.rerun()
+        if not df_limpio.empty and st.button("Importar clientes", use_container_width=True):
+            st.session_state.confirmar_importacion = True
+        if st.session_state.get("confirmar_importacion"):
+            st.warning(f"Confirma la importación de {len(df_limpio)} clientes en {base_seleccionada}.")
+            confirmar = st.checkbox("Confirmo que revisé los datos y deseo importarlos", key="confirmar_importacion_check")
+            if st.button("Confirmar importación", disabled=not confirmar, use_container_width=True):
+                registros = df_limpio.to_dict(orient="records")
+                supabase.table("clientes").insert(registros).execute()
+                st.session_state.confirmar_importacion = False
+                st.success(f"{len(registros)} clientes importados correctamente")
+                st.rerun()
 
     except Exception as e:
         st.error(str(e))
@@ -1005,7 +1041,7 @@ if menu == "📋 CRM":
                         <span class="action-icon action-whatsapp">☏</span>
                         <span>WhatsApp</span>
                     </a>
-                    <a class="action-link" href="tel:+57{telefono}">
+                    <a class="action-link" href="tel:+57{texto_html(telefono)}">
                         <span class="action-icon action-call">☎</span>
                         <span>Llamar</span>
                     </a>
@@ -1102,7 +1138,7 @@ if menu == "👥 Administración":
             .execute()
         )
 
-        df_usuarios = pd.DataFrame(usuarios.data)
+        df_usuarios = pd.DataFrame([{k: v for k, v in u.items() if k != "password"} for u in usuarios.data])
 
         st.dataframe(
             df_usuarios,
@@ -1152,23 +1188,18 @@ if menu == "👥 Administración":
             list(bases_dict.keys()),
         )
 
-        if st.button("Eliminar Base"):
+        confirmar_borrado = st.checkbox(
+            f"Confirmo eliminar la base {base_eliminar} y todos sus clientes",
+            key="confirmar_borrado_base",
+        )
+        if st.button("Eliminar Base", disabled=not confirmar_borrado):
             if len(bases_dict) <= 1:
                 st.error("No se puede eliminar la última base.")
             else:
                 id_base = bases_dict[base_eliminar]
-
-                supabase.table("clientes").delete().eq(
-                    "base_id",
-                    id_base,
-                ).execute()
-
-                supabase.table("bases").delete().eq(
-                    "id",
-                    id_base,
-                ).execute()
-
-                st.success("Base eliminada")
+                supabase.table("clientes").delete().eq("base_id", id_base).execute()
+                supabase.table("bases").delete().eq("id", id_base).execute()
+                st.success("Base y clientes asociados eliminados")
                 st.rerun()
 
         st.divider()
@@ -1180,13 +1211,24 @@ if menu == "👥 Administración":
         nuevo_rol = st.selectbox("Rol", ["admin", "asesor"])
 
         if st.button("Crear usuario"):
-            supabase.table("usuarios").insert({
-                "usuario": nuevo_usuario,
-                "password": nuevo_password,
-                "rol": nuevo_rol,
-            }).execute()
-
-            st.success("Usuario creado correctamente")
-            st.rerun()
+            usuario_limpio = nuevo_usuario.strip()
+            if not usuario_limpio or not nuevo_password:
+                st.error("Escribe un usuario y una contraseña.")
+            elif len(nuevo_password) < 10:
+                st.error("La contraseña debe tener al menos 10 caracteres.")
+            else:
+                existente = supabase.table("usuarios").select("usuario").eq(
+                    "usuario", usuario_limpio
+                ).limit(1).execute()
+                if existente.data:
+                    st.error("Ese usuario ya existe.")
+                else:
+                    supabase.table("usuarios").insert({
+                        "usuario": usuario_limpio,
+                        "password": hash_password(nuevo_password),
+                        "rol": nuevo_rol,
+                    }).execute()
+                    st.success("Usuario creado correctamente")
+                    st.rerun()
 
 
