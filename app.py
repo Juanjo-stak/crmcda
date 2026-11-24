@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 import secrets
 import time
@@ -32,6 +33,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+def obtener_configuracion(nombre, predeterminado=""):
+    valor = os.environ.get(nombre)
+    if valor is not None and str(valor).strip():
+        return str(valor).strip()
+    try:
+        valor = st.secrets.get(nombre, predeterminado)
+        return str(valor).strip() if valor is not None else str(predeterminado)
+    except Exception:
+        return str(predeterminado)
+
+
 # ======================================================
 # SESSION
 # ======================================================
@@ -55,11 +67,7 @@ if "pagina_clientes" not in st.session_state:
 # Sesión persistente en el navegador: solo guarda usuario y vencimiento, nunca la contraseña.
 SESSION_COOKIE_NAME = "crm_session"
 SESSION_DURATION_DAYS = 14
-SESSION_SECRET = ""
-try:
-    SESSION_SECRET = str(st.secrets.get("CRM_SESSION_SECRET", "")).strip()
-except Exception:
-    pass
+SESSION_SECRET = obtener_configuracion("CRM_SESSION_SECRET")
 
 cookie_manager = stx.CookieManager(key="crm_cookie_manager") if stx else None
 
@@ -705,7 +713,8 @@ def link_whatsapp(nombre, placa, telefono, fecha_renovacion=None):
     mensaje = f"""
 Hola {nombre}
 
-Te escribimos del CDA Occidente.
+Te escribimos de CDA del Occidente.
+Revisión Técnico Mecánica.
 
 Tu vehículo con placa {placa} vence el {vencimiento_texto}.
 
@@ -774,11 +783,11 @@ def configuracion_whatsapp():
         "language": "es_CO", "api_version": "v27.0",
     }
     try:
-        defaults["token"] = st.secrets.get("WHATSAPP_ACCESS_TOKEN", "")
-        defaults["phone_id"] = st.secrets.get("WHATSAPP_PHONE_NUMBER_ID", "")
-        defaults["template"] = st.secrets.get("WHATSAPP_TEMPLATE_NAME", defaults["template"])
-        defaults["language"] = st.secrets.get("WHATSAPP_TEMPLATE_LANGUAGE", defaults["language"])
-        defaults["api_version"] = st.secrets.get("WHATSAPP_API_VERSION", defaults["api_version"])
+        defaults["token"] = obtener_configuracion("WHATSAPP_ACCESS_TOKEN", "")
+        defaults["phone_id"] = obtener_configuracion("WHATSAPP_PHONE_NUMBER_ID", "")
+        defaults["template"] = obtener_configuracion("WHATSAPP_TEMPLATE_NAME", defaults["template"])
+        defaults["language"] = obtener_configuracion("WHATSAPP_TEMPLATE_LANGUAGE", defaults["language"])
+        defaults["api_version"] = obtener_configuracion("WHATSAPP_API_VERSION", defaults["api_version"])
     except Exception:
         pass
     return defaults
