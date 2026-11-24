@@ -540,6 +540,7 @@ st.sidebar.markdown(
     f"""
     <div class="sidebar-footer">
         <div class="user-chip">👤 {texto_html(st.session_state.usuario)}</div>
+        <div class="user-chip">👤 {escape(str(st.session_state.usuario or ""))}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1230,5 +1231,4 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
-
 
