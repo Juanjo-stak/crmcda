@@ -884,6 +884,12 @@ def convertir_fecha_excel(valor):
             return pd.to_datetime(serial, unit="D", origin="1899-12-30", errors="coerce")
 
     texto_es = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower()
+    texto_es = re.sub(
+        r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b\s*,?\s*",
+        "",
+        texto_es,
+    )
+    texto_es = re.sub(r"\s+", " ", texto_es).strip()
     meses = {
         "enero": "jan", "ene": "jan", "febrero": "feb", "feb": "feb",
         "marzo": "mar", "mar": "mar", "abril": "apr", "abr": "apr",
@@ -1060,7 +1066,14 @@ def pantalla_importar_base():
         df_limpio["cliente"] = df_limpio["cliente"].fillna("").astype(str).str.strip()
         df_limpio["telefono"] = df_limpio["telefono"].fillna("").astype(str).str.strip()
         df_limpio["sede"] = df_limpio["sede"].fillna("").astype(str).str.strip()
-        df_limpio["estado"] = df_limpio["estado"].fillna("Pendiente").astype(str).str.strip().str.title()
+        df_limpio["estado"] = (
+            df_limpio["estado"]
+            .replace(r"^\s*$", pd.NA, regex=True)
+            .fillna("Pendiente")
+            .astype(str)
+            .str.strip()
+            .str.title()
+        )
         df_limpio["fecha_renovacion"] = df_limpio["fecha_renovacion"].apply(convertir_fecha_excel)
         estados_validos = {"Pendiente", "Agendado", "Renovado"}
         validas = (
@@ -1614,6 +1627,8 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
+
 
 
 
