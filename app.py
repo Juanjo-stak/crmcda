@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 import math
 import re
@@ -262,7 +262,7 @@ st.markdown(
 
     .client-card-grid{
         display:grid;
-        grid-template-columns:minmax(280px, 1fr) 150px 150px 90px 90px;
+        grid-template-columns:minmax(280px, 1fr) 150px 150px 90px 90px 88px;
         align-items:center;
         gap:1rem;
     }
@@ -395,6 +395,12 @@ st.markdown(
     }
 
     .manage-button{
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        text-decoration:none !important;
+        color:#0f172a !important;
         border:1px solid var(--crm-border);
         border-radius:14px;
         padding:.62rem .5rem;
@@ -511,6 +517,9 @@ menu = st.sidebar.radio(
     ["📊 Dashboard", "📋 CRM", "📥 Importar Base", "👥 Administración"],
     label_visibility="collapsed",
 )
+
+if st.query_params.get("gestion"):
+    st.session_state.cliente_gestion_activa = str(st.query_params.get("gestion"))
 
 bases = (
     supabase
@@ -856,6 +865,26 @@ def pantalla_importar_base():
         st.warning("No hay bases creadas. Solicita a un administrador que cree la primera.")
         return
 
+    if st.session_state.rol == "admin" and bases_dict:
+        with st.expander("🗑️ Eliminar base"):
+            base_eliminar = st.selectbox(
+                "Base a eliminar", list(bases_dict.keys()), key="base_a_eliminar_importar"
+            )
+            confirmar_borrado = st.checkbox(
+                "Confirmo eliminar la base {} y todos sus clientes".format(base_eliminar),
+                key="confirmar_borrado_base_importar",
+            )
+            if st.button(
+                "Eliminar Base", disabled=not confirmar_borrado, key="eliminar_base_importar"
+            ):
+                if len(bases_dict) <= 1:
+                    st.error("No se puede eliminar la última base.")
+                else:
+                    id_base = bases_dict[base_eliminar]
+                    supabase.table("clientes").delete().eq("base_id", id_base).execute()
+                    supabase.table("bases").delete().eq("id", id_base).execute()
+                    st.success("Base y clientes asociados eliminados.")
+                    st.rerun()
     if not base_seleccionada:
         st.info("Crea una base para comenzar a importar clientes.")
         return
@@ -1322,47 +1351,44 @@ if menu == "📋 CRM":
         nota = texto_html(ultima_observacion(row["id"]))
         estado_html = texto_html(estado_actual)
 
-        tarjeta, columna_gestion = st.columns([8.5, 1.5])
-        with tarjeta:
-            st.markdown(
-                f'''
-                <div class="client-card">
-                    <div class="client-card-grid">
-                        <div class="client-main">
-                            <div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div>
-                            <div style="min-width:0;">
-                                <div class="plate">{placa_html}</div>
-                                <div class="client-name">{cliente_html}</div>
-                                <div class="last-note">📝 {nota}</div>
-                            </div>
-                        </div>
-                        <div class="card-separator">
-                            <div class="cell-title">Vencimiento</div>
-                            <div class="due-date">{vencimiento_html}</div>
-                        </div>
-                        <div class="card-separator">
-                            <div class="cell-title">Estado</div>
-                            <span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span>
-                        </div>
-                        <a class="action-link" href="{url}" target="_blank">
-                            <span class="action-icon action-whatsapp">☏</span>
-                            <span>WhatsApp</span>
-                        </a>
-                        <a class="action-link" href="tel:+57{texto_html(telefono)}">
-                            <span class="action-icon action-call">☎</span>
-                            <span>Llamar</span>
-                        </a>
-                    </div>
-                </div>
-                ''',
-                unsafe_allow_html=True,
-            )
-
         cliente_id_gestion = str(row["id"])
-        with columna_gestion:
-            if st.button("📋 Gestión", key="abrir_gestion_{}".format(cliente_id_gestion), use_container_width=True):
-                st.session_state.cliente_gestion_activa = cliente_id_gestion
-
+        st.markdown(
+            f'''
+            <div class="client-card">
+                <div class="client-card-grid">
+                    <div class="client-main">
+                        <div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div>
+                        <div style="min-width:0;">
+                            <div class="plate">{placa_html}</div>
+                            <div class="client-name">{cliente_html}</div>
+                            <div class="last-note">📝 {nota}</div>
+                        </div>
+                    </div>
+                    <div class="card-separator">
+                        <div class="cell-title">Vencimiento</div>
+                        <div class="due-date">{vencimiento_html}</div>
+                    </div>
+                    <div class="card-separator">
+                        <div class="cell-title">Estado</div>
+                        <span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span>
+                    </div>
+                    <a class="action-link" href="{url}" target="_blank">
+                        <span class="action-icon action-whatsapp">☏</span>
+                        <span>WhatsApp</span>
+                    </a>
+                    <a class="action-link" href="tel:+57{texto_html(telefono)}">
+                        <span class="action-icon action-call">☎</span>
+                        <span>Llamar</span>
+                    </a>
+                    <a class="manage-button" href="?gestion={urllib.parse.quote(cliente_id_gestion)}" aria-label="Abrir gestión de {placa_html}">
+                        <div style="font-size:1.45rem;">📋</div>
+                        <div>Gestión</div>
+                    </a>
+                </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
         if st.session_state.get("cliente_gestion_activa") == cliente_id_gestion:
             st.markdown("#### 📋 Gestión - {}".format(texto_html(placa)))
             col_estado, col_obs = st.columns([1, 2])
@@ -1413,6 +1439,8 @@ if menu == "📋 CRM":
 
             if cerrar:
                 st.session_state.cliente_gestion_activa = ""
+                if "gestion" in st.query_params:
+                    del st.query_params["gestion"]
                 st.rerun()
 
             historial = (
@@ -1494,25 +1522,6 @@ if menu == "👥 Administración":
                 st.success("Usuario eliminado")
                 st.rerun()
 
-        base_eliminar = st.selectbox(
-            "Eliminar base",
-            list(bases_dict.keys()),
-        )
-
-        confirmar_borrado = st.checkbox(
-            f"Confirmo eliminar la base {base_eliminar} y todos sus clientes",
-            key="confirmar_borrado_base",
-        )
-        if st.button("Eliminar Base", disabled=not confirmar_borrado):
-            if len(bases_dict) <= 1:
-                st.error("No se puede eliminar la última base.")
-            else:
-                id_base = bases_dict[base_eliminar]
-                supabase.table("clientes").delete().eq("base_id", id_base).execute()
-                supabase.table("bases").delete().eq("id", id_base).execute()
-                st.success("Base y clientes asociados eliminados")
-                st.rerun()
-
         st.divider()
 
         st.subheader("Crear usuario")
@@ -1541,5 +1550,6 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
 
 
