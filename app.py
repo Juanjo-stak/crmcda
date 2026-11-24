@@ -1,8 +1,11 @@
 ﻿import hashlib
+import json
 import math
 import re
 import secrets
+import urllib.error
 import urllib.parse
+import urllib.request
 from io import BytesIO
 from html import escape
 
@@ -630,6 +633,78 @@ def texto_html(valor):
     return escape(str(valor or ""))
 
 
+def configuracion_whatsapp():
+    """Lee secretos de Streamlit sin incluir credenciales en el código fuente."""
+    defaults = {
+        "token": "", "phone_id": "", "template": "recordatorio_renovacion",
+        "language": "es_CO", "api_version": "v27.0",
+    }
+    try:
+        defaults["token"] = st.secrets.get("WHATSAPP_ACCESS_TOKEN", "")
+        defaults["phone_id"] = st.secrets.get("WHATSAPP_PHONE_NUMBER_ID", "")
+        defaults["template"] = st.secrets.get("WHATSAPP_TEMPLATE_NAME", defaults["template"])
+        defaults["language"] = st.secrets.get("WHATSAPP_TEMPLATE_LANGUAGE", defaults["language"])
+        defaults["api_version"] = st.secrets.get("WHATSAPP_API_VERSION", defaults["api_version"])
+    except Exception:
+        pass
+    return defaults
+
+
+def enviar_plantilla_whatsapp(telefono, nombre, placa, fecha):
+    config = configuracion_whatsapp()
+    telefono = telefono_limpio(telefono)
+    if not telefono.startswith("57"):
+        telefono = "57" + telefono
+    if not telefono.isdigit() or not 11 <= len(telefono) <= 15:
+        raise ValueError("El teléfono no tiene un formato internacional válido.")
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": telefono,
+        "type": "template",
+        "template": {
+            "name": config["template"],
+            "language": {"code": config["language"]},
+            "components": [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": str(nombre)[:100]},
+                    {"type": "text", "text": str(placa)[:30]},
+                    {"type": "text", "text": str(fecha)[:30]},
+                ],
+            }],
+        },
+    }
+    url = "https://graph.facebook.com/{}/{}/messages".format(
+        config["api_version"], config["phone_id"]
+    )
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + config["token"],
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        try:
+            details = json.loads(error.read().decode("utf-8"))
+            message = details.get("error", {}).get("message", "Error de WhatsApp API")
+        except (ValueError, AttributeError):
+            message = "Error HTTP {} de WhatsApp API".format(error.code)
+        raise RuntimeError(message) from None
+    except urllib.error.URLError:
+        raise RuntimeError("No se pudo conectar con WhatsApp API.") from None
+
+    message_id = (result.get("messages") or [{}])[0].get("id")
+    if not message_id:
+        raise RuntimeError("WhatsApp no confirmó la recepción del mensaje.")
+    return message_id
+
 def ultima_observacion(cliente_id):
     ultima_gestion = (
         supabase
@@ -1001,6 +1076,111 @@ if menu == "📋 CRM":
     if sede_sel != "Todas":
         df_filtrado = df_filtrado[df_filtrado["sede"] == sede_sel]
 
+    with st.expander("📣 Envío masivo de renovaciones por WhatsApp"):
+        config_wa = configuracion_whatsapp()
+        if not config_wa["token"] or not config_wa["phone_id"]:
+            st.warning("Falta configurar WhatsApp Business API en los secretos de Streamlit.")
+            st.code(
+                'WHATSAPP_ACCESS_TOKEN = "tu_token_permanente"\n'
+                'WHATSAPP_PHONE_NUMBER_ID = "id_del_numero"\n'
+                'WHATSAPP_TEMPLATE_NAME = "recordatorio_renovacion"\n'
+                'WHATSAPP_TEMPLATE_LANGUAGE = "es_CO"\n'
+                'WHATSAPP_API_VERSION = "v27.0"',
+                language="toml",
+            )
+        else:
+            candidatos = df_filtrado[
+                df_filtrado["estado"].fillna("Pendiente").astype(str).str.lower() != "renovado"
+            ].copy()
+            candidatos["_telefono_api"] = candidatos["telefono"].apply(telefono_limpio)
+            candidatos["_telefono_api"] = candidatos["_telefono_api"].apply(
+                lambda t: t if t.startswith("57") else "57" + t
+            )
+            validos_telefono = candidatos["_telefono_api"].apply(
+                lambda t: t.isdigit() and 11 <= len(t) <= 15
+            )
+            omitidos = int((~validos_telefono).sum())
+            candidatos = candidatos.loc[validos_telefono].copy()
+            st.caption(
+                "Se consideran clientes no renovados dentro de los filtros actuales. "
+                "Se excluirán números vacíos o inválidos ({}).".format(omitidos)
+            )
+            if candidatos.empty:
+                st.info("No hay clientes pendientes con teléfono válido en este filtro.")
+            else:
+                opciones_ids = [str(row["id"]) for _, row in candidatos.iterrows()]
+                lookup_clientes = {
+                    str(row["id"]): row for _, row in candidatos.iterrows()
+                }
+                seleccionados = st.multiselect(
+                    "Selecciona los destinatarios",
+                    options=opciones_ids,
+                    format_func=lambda cliente_id: "{} · {} · {}".format(
+                        lookup_clientes[cliente_id].get("placa", ""),
+                        lookup_clientes[cliente_id].get("cliente", ""),
+                        lookup_clientes[cliente_id]["fecha_renovacion"].strftime("%d/%m/%Y")
+                        if pd.notna(lookup_clientes[cliente_id].get("fecha_renovacion"))
+                        else "Sin fecha",
+                    ),
+                    key="destinatarios_whatsapp_renovacion",
+                )
+                if seleccionados:
+                    vista = pd.DataFrame([lookup_clientes[i] for i in seleccionados])
+                    st.dataframe(
+                        vista[["placa", "cliente", "telefono", "fecha_renovacion"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    st.info(
+                        "La plantilla aprobada debe tener tres variables en el cuerpo, en este orden: "
+                        "nombre del cliente, placa y fecha de vencimiento."
+                    )
+                    consentimiento = st.checkbox(
+                        "Confirmo que estos clientes autorizaron recibir mensajes por WhatsApp.",
+                        key="confirmar_optin_whatsapp",
+                    )
+                    if st.button(
+                        "Enviar {} recordatorio(s)".format(len(seleccionados)),
+                        disabled=not consentimiento,
+                        type="primary",
+                        key="enviar_renovaciones_whatsapp",
+                    ):
+                        enviados = []
+                        fallidos = []
+                        no_registrados = []
+                        barra = st.progress(0, text="Enviando mensajes...")
+                        for posicion, cliente_id in enumerate(seleccionados, start=1):
+                            fila = lookup_clientes[cliente_id]
+                            fecha_valor = fila.get("fecha_renovacion")
+                            fecha_texto = fecha_valor.strftime("%d/%m/%Y") if pd.notna(fecha_valor) else ""
+                            try:
+                                message_id = enviar_plantilla_whatsapp(
+                                    fila.get("telefono", ""),
+                                    fila.get("cliente", ""),
+                                    fila.get("placa", ""),
+                                    fecha_texto,
+                                )
+                            except Exception as error:
+                                fallidos.append({"cliente": fila.get("cliente", ""), "error": str(error)})
+                            else:
+                                enviados.append(fila.get("cliente", ""))
+                                try:
+                                    supabase.table("gestiones").insert({
+                                        "cliente_id": fila["id"],
+                                        "observacion": "Recordatorio de renovación enviado por WhatsApp. ID: {}".format(message_id),
+                                    }).execute()
+                                except Exception:
+                                    no_registrados.append(fila.get("cliente", ""))
+                            barra.progress(posicion / len(seleccionados), text="Procesados {} de {}".format(posicion, len(seleccionados)))
+                        if enviados:
+                            st.success("WhatsApp aceptó {} mensaje(s).".format(len(enviados)))
+                        if fallidos:
+                            st.error("No se pudieron enviar {} mensaje(s).".format(len(fallidos)))
+                            st.dataframe(pd.DataFrame(fallidos), use_container_width=True, hide_index=True)
+                        if no_registrados:
+                            st.warning("Algunos envíos se completaron, pero no se pudieron anotar en el historial: {}.".format(", ".join(no_registrados)))
+                        st.rerun()
+
     with col_export:
         excel = convertir_excel(df_filtrado)
         st.download_button(
@@ -1237,5 +1417,7 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
+
 
 
