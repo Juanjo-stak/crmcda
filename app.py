@@ -700,7 +700,7 @@ def fecha_vencimiento_proxima(fecha):
     return fecha + pd.DateOffset(years=1)
 
 
-def link_whatsapp(nombre, placa, telefono, fecha_renovacion=None):
+def link_whatsapp(nombre, placa, telefono, fecha_renovacion=None, sede=None):
     telefono = str(telefono).replace(".0", "")
     telefono = telefono.replace(" ", "")
     telefono = re.sub(r"\D", "", telefono)
@@ -710,11 +710,15 @@ def link_whatsapp(nombre, placa, telefono, fecha_renovacion=None):
 
     fecha_proxima = fecha_vencimiento_proxima(fecha_renovacion)
     vencimiento_texto = fecha_proxima.strftime("%d/%m/%Y") if fecha_proxima is not None else "próximo"
+    sede = str(sede).strip() if sede is not None else ""
+    if sede.lower() in {"nan", "none", "nat", "<na>"}:
+        sede = ""
+    sede_texto = ("\nSede: {}\n".format(sede)) if sede else ""
     mensaje = f"""
 Hola {nombre}
 
 Te escribimos de CDA del Occidente.
-Revisión Técnico Mecánica.
+Revisión Técnico Mecánica.{sede_texto}
 
 Tu vehículo con placa {placa} vence el {vencimiento_texto}.
 
@@ -781,6 +785,7 @@ def configuracion_whatsapp():
     defaults = {
         "token": "", "phone_id": "", "template": "recordatorio_renovacion",
         "language": "es_CO", "api_version": "v27.0",
+        "template_with_site": False,
     }
     try:
         defaults["token"] = obtener_configuracion("WHATSAPP_ACCESS_TOKEN", "")
@@ -788,18 +793,34 @@ def configuracion_whatsapp():
         defaults["template"] = obtener_configuracion("WHATSAPP_TEMPLATE_NAME", defaults["template"])
         defaults["language"] = obtener_configuracion("WHATSAPP_TEMPLATE_LANGUAGE", defaults["language"])
         defaults["api_version"] = obtener_configuracion("WHATSAPP_API_VERSION", defaults["api_version"])
+        incluir_sede = obtener_configuracion("WHATSAPP_TEMPLATE_WITH_SITE", "false").strip().lower()
+        defaults["template_with_site"] = incluir_sede in {"1", "true", "yes", "si", "sí"}
     except Exception:
         pass
     return defaults
 
 
-def enviar_plantilla_whatsapp(telefono, nombre, placa, fecha):
+def enviar_plantilla_whatsapp(telefono, nombre, placa, fecha, sede=""):
     config = configuracion_whatsapp()
     telefono = telefono_limpio(telefono)
     if not telefono.startswith("57"):
         telefono = "57" + telefono
     if not telefono.isdigit() or not 11 <= len(telefono) <= 15:
         raise ValueError("El teléfono no tiene un formato internacional válido.")
+
+    parametros_cuerpo = [
+        {"type": "text", "text": str(nombre)[:100]},
+        {"type": "text", "text": str(placa)[:30]},
+        {"type": "text", "text": str(fecha)[:30]},
+    ]
+    if config["template_with_site"]:
+        sede_parametro = str(sede).strip() if sede is not None else ""
+        if sede_parametro.lower() in {"", "nan", "none", "nat", "<na>"}:
+            sede_parametro = "Sede por confirmar"
+        parametros_cuerpo.append({
+            "type": "text",
+            "text": sede_parametro[:100],
+        })
 
     payload = {
         "messaging_product": "whatsapp",
@@ -810,11 +831,7 @@ def enviar_plantilla_whatsapp(telefono, nombre, placa, fecha):
             "language": {"code": config["language"]},
             "components": [{
                 "type": "body",
-                "parameters": [
-                    {"type": "text", "text": str(nombre)[:100]},
-                    {"type": "text", "text": str(placa)[:30]},
-                    {"type": "text", "text": str(fecha)[:30]},
-                ],
+                "parameters": parametros_cuerpo,
             }],
         },
     }
@@ -1416,10 +1433,13 @@ if menu == "📋 CRM":
                 'WHATSAPP_PHONE_NUMBER_ID = "id_del_numero"\n'
                 'WHATSAPP_TEMPLATE_NAME = "recordatorio_renovacion"\n'
                 'WHATSAPP_TEMPLATE_LANGUAGE = "es_CO"\n'
+                'WHATSAPP_TEMPLATE_WITH_SITE = "false"  # cambiar a true al aprobar {{4}}\n'
                 'WHATSAPP_API_VERSION = "v27.0"',
                 language="toml",
             )
         else:
+            if not config_wa["template_with_site"]:
+                st.info("La sede se añadirá a los envíos masivos cuando la plantilla aprobada tenga el campo {{4}} y WHATSAPP_TEMPLATE_WITH_SITE esté en true.")
             candidatos = df_filtrado[
                 df_filtrado["estado"].fillna("Pendiente").astype(str).str.lower() != "renovado"
             ].copy()
@@ -1491,6 +1511,7 @@ if menu == "📋 CRM":
                                     fila.get("cliente", ""),
                                     fila.get("placa", ""),
                                     fecha_texto,
+                                    fila.get("sede", ""),
                                 )
                             except Exception as error:
                                 fallidos.append({"cliente": fila.get("cliente", ""), "error": str(error)})
@@ -1547,7 +1568,7 @@ if menu == "📋 CRM":
         vencimiento_texto = vencimiento.strftime("%d/%m/%Y") if pd.notna(vencimiento) else "Sin fecha"
         vencimiento_html = texto_html(vencimiento_texto)
         telefono = telefono_limpio(row.get("telefono", ""))
-        url = link_whatsapp(cliente, placa, telefono, row.get("fecha_renovacion"))
+        url = link_whatsapp(cliente, placa, telefono, row.get("fecha_renovacion"), row.get("sede", ""))
         nota = texto_html(ultima_observacion(row["id"]))
         estado_html = texto_html(estado_actual)
 
@@ -1747,6 +1768,7 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
 
 
 
