@@ -586,7 +586,14 @@ if st.sidebar.button("↪ Salir", use_container_width=True):
 # HELPERS
 # ======================================================
 
-def link_whatsapp(nombre, placa, telefono):
+def fecha_vencimiento_proxima(fecha):
+    fecha = pd.to_datetime(fecha, errors="coerce", dayfirst=True)
+    if pd.isna(fecha):
+        return None
+    return fecha + pd.DateOffset(years=1)
+
+
+def link_whatsapp(nombre, placa, telefono, fecha_renovacion=None):
     telefono = str(telefono).replace(".0", "")
     telefono = telefono.replace(" ", "")
     telefono = re.sub(r"\D", "", telefono)
@@ -594,12 +601,14 @@ def link_whatsapp(nombre, placa, telefono):
     if not telefono.startswith("57"):
         telefono = "57" + telefono
 
+    fecha_proxima = fecha_vencimiento_proxima(fecha_renovacion)
+    vencimiento_texto = fecha_proxima.strftime("%d/%m/%Y") if fecha_proxima is not None else "próximo"
     mensaje = f"""
 Hola {nombre}
 
 Te escribimos del CDA Occidente.
 
-Tu vehículo con placa {placa} tiene vencimiento próximo.
+Tu vehículo con placa {placa} vence el {vencimiento_texto}.
 
 ¿Deseas agendar tu revisión?
 """
@@ -1134,8 +1143,10 @@ for columna, valor_defecto in {
 
 if not df.empty and "fecha_renovacion" in df.columns:
     df["fecha_renovacion"] = pd.to_datetime(
-        df["fecha_renovacion"],
-        errors="coerce",
+        df["fecha_renovacion"], errors="coerce"
+    )
+    df = df.sort_values(
+        "fecha_renovacion", ascending=True, na_position="last", kind="stable"
     )
 
 
@@ -1364,7 +1375,8 @@ if menu == "📋 CRM":
                         for posicion, cliente_id in enumerate(seleccionados, start=1):
                             fila = lookup_clientes[cliente_id]
                             fecha_valor = fila.get("fecha_renovacion")
-                            fecha_texto = fecha_valor.strftime("%d/%m/%Y") if pd.notna(fecha_valor) else ""
+                            fecha_proxima = fecha_vencimiento_proxima(fecha_valor)
+                            fecha_texto = fecha_proxima.strftime("%d/%m/%Y") if fecha_proxima is not None else ""
                             try:
                                 message_id = enviar_plantilla_whatsapp(
                                     fila.get("telefono", ""),
@@ -1427,7 +1439,7 @@ if menu == "📋 CRM":
         vencimiento_texto = vencimiento.strftime("%d/%m/%Y") if pd.notna(vencimiento) else "Sin fecha"
         vencimiento_html = texto_html(vencimiento_texto)
         telefono = telefono_limpio(row.get("telefono", ""))
-        url = link_whatsapp(cliente, placa, telefono)
+        url = link_whatsapp(cliente, placa, telefono, row.get("fecha_renovacion"))
         nota = texto_html(ultima_observacion(row["id"]))
         estado_html = texto_html(estado_actual)
 
@@ -1627,6 +1639,7 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
 
 
 
