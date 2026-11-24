@@ -820,7 +820,7 @@ def mapear_encabezados(encabezados):
             "branch", "site",
         },
         "fecha_renovacion": {
-            "fecha renovacion", "fecha de renovacion", "vencimiento", "fecha vencimiento",
+            "fecha", "fecha renovacion", "fecha de renovacion", "vencimiento", "fecha vencimiento",
             "fecha de vencimiento", "fecha proxima revision", "proxima revision",
             "fecha revision", "fecha vencimiento rtm", "fecha rtm", "renewal date",
             "expiration date", "due date",
@@ -831,7 +831,11 @@ def mapear_encabezados(encabezados):
     for encabezado in encabezados:
         normalizado = normalizar_encabezado(encabezado)
         for campo, opciones in alias.items():
-            if campo not in resultado and normalizado in opciones:
+            coincide = normalizado in opciones
+            if coincide and (
+                campo not in resultado
+                or (campo == "fecha_renovacion" and normalizado != "fecha")
+            ):
                 resultado[campo] = encabezado
     return resultado
 
@@ -854,12 +858,59 @@ def nombres_columnas_unicos(valores):
 
 
 def convertir_fecha_excel(valor):
-    if pd.isna(valor) or str(valor).strip() == "":
+    """Interpreta fechas Excel, fechas nativas, texto y seriales comunes."""
+    if valor is None or pd.isna(valor):
         return pd.NaT
     if isinstance(valor, (int, float)) and not isinstance(valor, bool):
-        if 20000 <= float(valor) <= 80000:
-            return pd.to_datetime(valor, unit="D", origin="1899-12-30", errors="coerce")
-    return pd.to_datetime(valor, errors="coerce", dayfirst=True)
+        numero = float(valor)
+        if 20000 <= numero <= 80000:
+            return pd.to_datetime(numero, unit="D", origin="1899-12-30", errors="coerce")
+        if 1_000_000_000 <= numero < 100_000_000_000:
+            return pd.to_datetime(numero, unit="s", errors="coerce")
+        if 1_000_000_000_000 <= numero < 100_000_000_000_000:
+            return pd.to_datetime(numero, unit="ms", errors="coerce")
+        valor = str(int(numero)) if numero.is_integer() else str(numero)
+
+    texto = str(valor).strip()
+    if not texto:
+        return pd.NaT
+    if re.fullmatch(r"\d{8}", texto):
+        fecha_compacta = pd.to_datetime(texto, format="%Y%m%d", errors="coerce")
+        if pd.notna(fecha_compacta):
+            return fecha_compacta
+    if re.fullmatch(r"\d{4,6}(?:\.0+)?", texto):
+        serial = float(texto)
+        if 20000 <= serial <= 80000:
+            return pd.to_datetime(serial, unit="D", origin="1899-12-30", errors="coerce")
+
+    texto_es = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower()
+    meses = {
+        "enero": "jan", "ene": "jan", "febrero": "feb", "feb": "feb",
+        "marzo": "mar", "mar": "mar", "abril": "apr", "abr": "apr",
+        "mayo": "may", "junio": "jun", "jun": "jun", "julio": "jul",
+        "jul": "jul", "agosto": "aug", "ago": "aug", "septiembre": "sep",
+        "setiembre": "sep", "sept": "sep", "sep": "sep", "octubre": "oct",
+        "oct": "oct", "noviembre": "nov", "nov": "nov", "diciembre": "dec",
+        "dic": "dec",
+    }
+    texto_es = re.sub(r"\b(de|del)\b", " ", texto_es)
+    for mes_es, mes_en in meses.items():
+        texto_es = re.sub(r"\b{}\b".format(mes_es), mes_en, texto_es)
+
+    formatos = [
+        "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y",
+        "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%m/%d/%Y", "%m-%d-%Y",
+        "%Y%m%d", "%d%m%Y", "%d %b %Y", "%d %B %Y", "%b %d, %Y",
+        "%B %d, %Y", "%d %b %Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    ]
+    for formato in formatos:
+        fecha = pd.to_datetime(texto_es, format=formato, errors="coerce")
+        if pd.notna(fecha):
+            return fecha
+    fecha = pd.to_datetime(texto_es, errors="coerce", dayfirst=True)
+    if pd.notna(fecha):
+        return fecha
+    return pd.to_datetime(texto_es, errors="coerce", dayfirst=False)
 
 def pantalla_importar_base():
     header("Importar Base de Clientes", "📥")
@@ -1563,9 +1614,6 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
-
-
-
 
 
 
