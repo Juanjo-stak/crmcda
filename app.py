@@ -394,6 +394,20 @@ st.markdown(
         background:linear-gradient(145deg,#3b82f6,#2563eb);
     }
 
+    div[class*="st-key-abrir_gestion_"] button{
+        min-height:4.9rem;
+        border-radius:14px;
+        border:1px solid var(--crm-border);
+        background:white;
+        box-shadow:0 8px 20px rgba(15,23,42,.06);
+        font-size:.78rem;
+        font-weight:700;
+    }
+
+    div[class*="st-key-abrir_gestion_"] button:hover{
+        border-color:var(--crm-blue);
+        color:var(--crm-blue);
+    }
     .manage-button{
         display:flex;
         flex-direction:column;
@@ -517,9 +531,6 @@ menu = st.sidebar.radio(
     ["📊 Dashboard", "📋 CRM", "📥 Importar Base", "👥 Administración"],
     label_visibility="collapsed",
 )
-
-if st.query_params.get("gestion"):
-    st.session_state.cliente_gestion_activa = str(st.query_params.get("gestion"))
 
 bases = (
     supabase
@@ -1352,43 +1363,42 @@ if menu == "📋 CRM":
         estado_html = texto_html(estado_actual)
 
         cliente_id_gestion = str(row["id"])
-        st.markdown(
-            f'''
-            <div class="client-card">
-                <div class="client-card-grid">
-                    <div class="client-main">
-                        <div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div>
-                        <div style="min-width:0;">
-                            <div class="plate">{placa_html}</div>
-                            <div class="client-name">{cliente_html}</div>
-                            <div class="last-note">📝 {nota}</div>
-                        </div>
-                    </div>
-                    <div class="card-separator">
-                        <div class="cell-title">Vencimiento</div>
-                        <div class="due-date">{vencimiento_html}</div>
-                    </div>
-                    <div class="card-separator">
-                        <div class="cell-title">Estado</div>
-                        <span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span>
-                    </div>
-                    <a class="action-link" href="{url}" target="_blank">
-                        <span class="action-icon action-whatsapp">☏</span>
-                        <span>WhatsApp</span>
-                    </a>
-                    <a class="action-link" href="tel:+57{texto_html(telefono)}">
-                        <span class="action-icon action-call">☎</span>
-                        <span>Llamar</span>
-                    </a>
-                    <a class="manage-button" href="?gestion={urllib.parse.quote(cliente_id_gestion)}" aria-label="Abrir gestión de {placa_html}">
-                        <div style="font-size:1.45rem;">📋</div>
-                        <div>Gestión</div>
-                    </a>
-                </div>
-            </div>
-            ''',
-            unsafe_allow_html=True,
-        )
+        with st.container(border=True):
+            col_principal, col_vencimiento, col_estado, col_whatsapp, col_llamar, col_gestion = st.columns(
+                [4.2, 1.45, 1.35, 1.0, 1.0, 1.05]
+            )
+            with col_principal:
+                st.markdown(
+                    f'<div class="client-main"><div class="vehicle-avatar" style="background:{color_avatar(index)};">🚗</div><div style="min-width:0;"><div class="plate">{placa_html}</div><div class="client-name">{cliente_html}</div><div class="last-note">📝 {nota}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+            with col_vencimiento:
+                st.markdown(
+                    f'<div class="card-separator"><div class="cell-title">Vencimiento</div><div class="due-date">{vencimiento_html}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            with col_estado:
+                st.markdown(
+                    f'<div class="card-separator"><div class="cell-title">Estado</div><span class="status-pill {estado_clase(estado_actual)}">{estado_html}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            with col_whatsapp:
+                st.markdown(
+                    f'<a class="action-link" href="{url}" target="_blank"><span class="action-icon action-whatsapp">☏</span><span>WhatsApp</span></a>',
+                    unsafe_allow_html=True,
+                )
+            with col_llamar:
+                st.markdown(
+                    f'<a class="action-link" href="tel:+57{texto_html(telefono)}"><span class="action-icon action-call">☎</span><span>Llamar</span></a>',
+                    unsafe_allow_html=True,
+                )
+            with col_gestion:
+                if st.button(
+                    "📋 Gestión",
+                    key="abrir_gestion_{}".format(cliente_id_gestion),
+                    use_container_width=True,
+                ):
+                    st.session_state.cliente_gestion_activa = cliente_id_gestion
         if st.session_state.get("cliente_gestion_activa") == cliente_id_gestion:
             st.markdown("#### 📋 Gestión - {}".format(texto_html(placa)))
             col_estado, col_obs = st.columns([1, 2])
@@ -1439,8 +1449,6 @@ if menu == "📋 CRM":
 
             if cerrar:
                 st.session_state.cliente_gestion_activa = ""
-                if "gestion" in st.query_params:
-                    del st.query_params["gestion"]
                 st.rerun()
 
             historial = (
@@ -1550,6 +1558,7 @@ if menu == "👥 Administración":
                     }).execute()
                     st.success("Usuario creado correctamente")
                     st.rerun()
+
 
 
 
